@@ -1,5 +1,5 @@
 defmodule GenImap.CommandParser do
-
+    
     @moduledoc """
     This module handles raw input from the client, and transforms it into matchable formats
     """
@@ -96,7 +96,7 @@ defmodule GenImap.CommandParser do
     defp do_parse([tag, "FETCH" | args]) do
         case parse_args(args) do
             [uid_range | rest] -> 
-                {:ok, tag, {:fetch, uid_range, rest}}
+                {:ok, tag, {:fetch, uid_range, rest |> Enum.join(" ")}}
                 _ -> arg_miss_match(tag, :fetch)
         end
     end
