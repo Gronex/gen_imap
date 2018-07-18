@@ -8,49 +8,51 @@ defmodule GenImap.ImapProtocol do
     @type state :: any
     @type result :: {:ok, state} | {:error, state} | {:invalid, state}
 
+    @callback capabilities(capabilities :: MapSet.t) :: MapSet.t
     @callback init(opts :: map) :: {:ok, state} | {:error, any}
     @callback login(username :: String.t, password :: String.t, state) :: result
     @callback logout(state :: state) :: {:ok, state}
     @callback handle_fetch(query :: list, uid_range :: [min: integer, max: integer] | [min: integer] | [max: integer] | integer, state) :: result
     
-    @optional_callbacks logout: 1
+    @optional_callbacks logout: 1, capabilities: 1
 
 
     defstruct [
         callback_module: nil,
         state: nil,
-        server_name: nil
+        tls_enabeled: false,
+        session_id: nil
     ]
 
-    @capabilities [
+    @capabilities MapSet.new([
         "CAPABILITY", 
         "IMAP4rev1", 
-        #"IDLE", 
-        #"STARTTLS",
+        #"IDLE",
         "LOGINDISABLED"
-      ]
+      ])
 
     @impl true
     def start_link(ref, socket, transport, opts) do
-        Logger.info("Client connected. #{inspect(opts)}")
+        Logger.info("Client connected.")
+        Logger.debug(inspect(opts))
         pid = spawn_link(__MODULE__, :init, [ref, socket, transport, opts])
         {:ok, pid}
     end
 
-    def init(ref, socket, transport, %{server_name: server_name, callback_module: callback_module} = opts) do
-        
-        case callback_module.init(opts) do
+    def init(ref, socket, transport, opts) do
+        case opts.callback_module.init(opts) do
             {:ok, init_state} ->
                 :ok = :ranch.accept_ack(ref)
-                transport.send(socket, "* OK #{server_name} Ready\r\n")
-        
+                transport.send(socket, "* OK #{opts.server_name} Ready\r\n")
+
                 state = %ImapProtocol{
-                    callback_module: callback_module,
-                    server_name: server_name,
-                    state: init_state
+                    callback_module: opts.callback_module,
+                    tls_enabeled: opts.tls_enabeled,
+                    state: init_state,
+                    session_id: self()
                 }
-        
-                Logger.info("Ready for messages.")
+
+                Logger.info("#{inspect(state.session_id)} - Ready for messages.")
         
                 loop(socket, transport, state)
             
@@ -63,7 +65,7 @@ defmodule GenImap.ImapProtocol do
     defp loop(socket, transport, state) do
         case transport.recv(socket, 0, 5000) do
             {:ok, data} ->
-                with :ok = Logger.debug("Recieved: #{data |> String.trim}"),
+                with :ok = Logger.debug("#{inspect(state.session_id)} - Recieved: #{data |> String.trim}"),
                     {:ok, tag, command} <- GenImap.CommandParser.parse(data),
                     {:ok, responses, state} <- execute_command(command, state, tag) do
                         :ok = respond(transport, socket, responses)
@@ -165,13 +167,25 @@ defmodule GenImap.ImapProtocol do
         {:ok, response, state}
       end
     
-      defp execute_command(:capability, state, tag) do
+      defp execute_command(:capability, %ImapProtocol{callback_module: callback_module, tls_enabeled: tls_enabeled} = state, tag) do
         capabilities = 
-          @capabilities
-          |> Enum.join(" ")
+            if tls_enabeled do
+                @capabilities
+                |> MapSet.put("STARTTLS")
+            else
+                @capabilities
+            end
+
+        capabilities = 
+            if function_exported?(callback_module, :capabilities, 0) do
+                callback_module.capabilities(capabilities)
+            else
+                capabilities
+            end
+
 
         response = [
-            "* #{capabilities}",
+            "* #{capabilities |> Enum.join(" ")}",
             "#{tag} OK"
         ]
 

@@ -3,7 +3,8 @@ defmodule ImapServer do
 
     @default_opts %{
        port: 1430,
-       server_name: "IMAP4rev1 GenImap server"
+       server_name: "IMAP4rev1 GenImap server",
+       tls_enabeled: false
     }
 
     def start_link(opts \\ []) do
